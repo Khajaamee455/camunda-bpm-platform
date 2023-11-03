@@ -23,8 +23,9 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Date;
 import java.util.List;
-
+import org.camunda.bpm.engine.impl.util.ClockUtil;
 import org.camunda.bpm.engine.management.JobDefinition;
 import org.camunda.bpm.engine.runtime.ActivityInstance;
 import org.camunda.bpm.engine.runtime.Execution;
@@ -35,7 +36,6 @@ import org.camunda.bpm.engine.task.TaskQuery;
 import org.camunda.bpm.engine.test.Deployment;
 import org.camunda.bpm.engine.test.util.PluggableProcessEngineTest;
 import org.camunda.bpm.model.bpmn.Bpmn;
-import org.hamcrest.CoreMatchers;
 import org.junit.Test;
 
 /**
@@ -372,5 +372,41 @@ public class ParallelGatewayTest extends PluggableProcessEngineTest {
 
     // then
     assertEquals(3, taskService.createTaskQuery().count());
+  }
+
+  @Deployment
+  @Test
+  public void testParallelGatewayCancellationHistoryEvent() {
+    // given
+    // a process with one splitting and one merging parallel gateway and two parallel sequence flows between them
+    // one sequence flow has a wait state "Event_Wait", the other has none
+    var pi = runtimeService.startProcessInstanceByKey("parallelProcess");
+
+    var currentTime = new Date(5000);
+    ClockUtil.setCurrentTime(currentTime);
+
+    // when
+    // cancel "Event_Wait" first
+    // then cancel "Gateway_out" (merging parallel gateway)
+    this.runtimeService.createProcessInstanceModification(pi.getId())
+        .cancelAllForActivity("Event_Wait")
+        .cancelAllForActivity("Gateway_out")
+        .execute();
+
+    // then
+    // the whole process instance is canceled and history is produced
+    assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(pi.getId()).singleResult()).isNull();
+    assertThat(historyService.createHistoricProcessInstanceQuery().processInstanceId(pi.getId()).singleResult()).isNotNull();
+
+    //
+    var historicActivityInstanceEventWait = this.historyService.createHistoricActivityInstanceQuery()
+        .activityId("Event_Wait")
+        .singleResult();
+    assertThat(historicActivityInstanceEventWait.getEndTime()).isEqualToIgnoringMillis(currentTime);
+
+    var historicActivityInstanceMergingGateway = this.historyService.createHistoricActivityInstanceQuery()
+        .activityId("Gateway_out")
+        .singleResult();
+    assertThat(historicActivityInstanceMergingGateway.getEndTime()).isEqualToIgnoringMillis(currentTime);
   }
 }
